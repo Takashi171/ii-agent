@@ -2443,6 +2443,10 @@
       render();
     });
   }
+  function isClaimed(pid){
+    return !!(state.session && state.session.connected && state.session.data &&
+      state.session.data.players && state.session.data.players[pid] && state.session.data.players[pid].claimed);
+  }
   function startRemoteRound(kind, prompt){
     if (!state.session || !state.session.connected) return;
     var roundId = uid();
@@ -2450,15 +2454,40 @@
     state.session.ref.set({ round: { kind: kind, roundId: roundId, prompt: prompt, answers: {} } }, { merge: true })
       .catch(function(err){ console.warn('round write failed', err); });
   }
+  function startRemoteWhisper(kind, question, targetPlayerId){
+    if (!state.session || !state.session.connected) return;
+    var roundId = uid();
+    state.session.roundId = roundId;
+    state.session.ref.set({ round: { kind: kind, roundId: roundId, prompt: question, targetPlayerId: targetPlayerId, ack: false } }, { merge: true })
+      .catch(function(err){ console.warn('whisper round write failed', err); });
+  }
+  function completeBottleWhisper(){ state.modeState.phase = 'flip'; }
+  function completeParanoiaWhisper(){ state.modeState.phase = 'open'; advanceTurn(); }
+  function computeVoteTally(ms){
+    var tally = {};
+    ms.votes.forEach(function(v){ tally[v.targetId] = (tally[v.targetId] || 0) + 1; });
+    var maxVotes = Math.max.apply(null, Object.values(tally));
+    var topIds = Object.keys(tally).filter(function(id){ return tally[id] === maxVotes; });
+    ms.tally = tally;
+    ms.maxVotes = maxVotes;
+    ms.topIds = topIds;
+    ms.votersRevealed = false;
+    ms.phase = 'result';
+    topIds.forEach(function(id){
+      var p = state.players.find(function(pl){ return pl.id === id; });
+      p.scores.mlt += 1;
+    });
+  }
   function handleSessionUpdate(data){
     if (!state.session) return;
     state.session.data = data;
     if (state.screen === 'connect') { render(); return; }
-    if (state.screen === 'mode' && state.modeState && state.modeState.phase === 'collecting' &&
-        data.round && data.round.roundId === state.session.roundId) {
-      var ms = state.modeState;
-      var incoming = data.round.answers || {};
-      var changed = false;
+    if (state.screen !== 'mode' || !state.modeState || !data.round || data.round.roundId !== state.session.roundId) return;
+    var ms = state.modeState;
+    var round = data.round;
+    var changed = false;
+    if ((round.kind === 'guess' || round.kind === 'hotseat') && ms.phase === 'collecting') {
+      var incoming = round.answers || {};
       Object.keys(incoming).forEach(function(pid){
         var already = ms.answers.some(function(a){ return a.playerId === pid; });
         if (!already) {
@@ -2468,8 +2497,23 @@
           changed = true;
         }
       });
-      if (changed) render();
+    } else if (round.kind === 'vote' && ms.phase === 'voting') {
+      var incomingV = round.answers || {};
+      Object.keys(incomingV).forEach(function(pid){
+        var already = ms.votes.some(function(v){ return v.voterId === pid; });
+        if (!already) {
+          ms.votes.push({ voterId: pid, targetId: incomingV[pid] });
+          changed = true;
+        }
+      });
+    } else if (round.kind === 'bottle' && round.ack && ms.phase === 'whisper-remote-wait') {
+      completeBottleWhisper();
+      changed = true;
+    } else if (round.kind === 'paranoia' && round.ack && ms.phase === 'whisper-remote-wait') {
+      completeParanoiaWhisper();
+      changed = true;
     }
+    if (changed) render();
   }
   function advanceTurn(){ state.turnIndex = (state.turnIndex + 1) % Math.max(state.players.length, 1); }
 
@@ -2619,11 +2663,26 @@
     } else if (key === 'charades') {
       state.modeState = { phase: 'ready' };
     } else if (key === 'bottle') {
-      state.modeState = { phase: 'intro' };
+      var bcp = currentPlayer();
+      if (isClaimed(bcp.id)) {
+        var bq = draw('group');
+        state.modeState = { phase: 'whisper-remote-wait', question: bq };
+        startRemoteWhisper('bottle', bq, bcp.id);
+      } else {
+        state.modeState = { phase: 'intro' };
+      }
     } else if (key === 'paranoia') {
-      state.modeState = { phase: 'intro', dare: null };
+      var pcp = currentPlayer();
+      if (isClaimed(pcp.id)) {
+        var pq = draw('group');
+        state.modeState = { phase: 'whisper-remote-wait', question: pq, dare: null };
+        startRemoteWhisper('paranoia', pq, pcp.id);
+      } else {
+        state.modeState = { phase: 'intro', dare: null };
+      }
     } else if (key === 'vote') {
       state.modeState = { phase: 'voting', prompt: draw('mlt'), collectIndex: 0, revealed: false, votes: [] };
+      if (state.session && state.session.connected) startRemoteRound('vote', state.modeState.prompt);
     } else if (key === 'hotseat') {
       state.modeState = { phase: 'choices', options: [draw('truth'), draw('truth'), draw('truth')] };
     } else if (key === 'rule5') {
@@ -3001,6 +3060,12 @@
     var ms = state.modeState;
     var m = MODE_META.bottle;
     var cp = currentPlayer();
+    if (ms.phase === 'whisper-remote-wait') {
+      return (
+        '<div class="cover-card" style="--mc:' + m.color + '"><span class="big-emoji">📱</span><div>Check your phone,<br><strong>' + esc(cp.name) + '</strong><br><span class="progress-note">Your question is waiting there privately.</span></div></div>' +
+        '<button class="btn btn-ghost btn-block" type="button" data-action="whisper-remote-fallback">They\'re not on their phone — pass this one instead</button>'
+      );
+    }
     if (ms.phase === 'intro') {
       return (
         '<div class="cover-card" style="--mc:' + m.color + '"><span class="big-emoji">🍾</span><div>Pass the phone to<br><strong>' + esc(cp.name) + '</strong></div><button class="btn btn-primary" type="button" data-action="bottle-reveal">I\'m ready</button></div>'
@@ -3028,6 +3093,12 @@
     var ms = state.modeState;
     var m = MODE_META.paranoia;
     var cp = currentPlayer();
+    if (ms.phase === 'whisper-remote-wait') {
+      return (
+        '<div class="cover-card" style="--mc:' + m.color + '"><span class="big-emoji">📱</span><div>Check your phone,<br><strong>' + esc(cp.name) + '</strong><br><span class="progress-note">Your question is waiting there privately.</span></div></div>' +
+        '<button class="btn btn-ghost btn-block" type="button" data-action="whisper-remote-fallback">They\'re not on their phone — pass this one instead</button>'
+      );
+    }
     if (ms.phase === 'intro') {
       return (
         '<div class="cover-card" style="--mc:' + m.color + '"><span class="big-emoji">👀</span><div>Pass the phone to<br><strong>' + esc(cp.name) + '</strong></div><button class="btn btn-primary" type="button" data-action="paranoia-reveal">I\'m ready</button></div>'
@@ -3050,10 +3121,37 @@
     );
   }
 
+  function renderVoteRemote(ms, m){
+    if (ms.fallbackFor) {
+      var fp = state.players.find(function(pl){ return pl.id === ms.fallbackFor; });
+      return (
+        '<div class="prompt-card" style="--mc:' + m.color + '"><div class="kicker">Voting for ' + esc(fp.name) + '</div><div class="prompt-text">' + esc(ms.prompt) + '</div></div>' +
+        '<p class="screen-sub">Pick who fits — nobody else should see this.</p>' +
+        '<div class="name-grid">' + screenPlayers('vote-pick-fallback') + '</div>'
+      );
+    }
+    var rows = state.players.map(function(p){
+      var got = ms.votes.some(function(v){ return v.voterId === p.id; });
+      return '<div class="remote-row' + (got ? ' done' : '') + '"><span>' + (got ? '✅' : '⏳') + ' ' + esc(p.name) + '</span>' +
+        (got ? '' : '<button class="btn btn-ghost btn-sm" type="button" data-action="remote-fallback" data-id="' + p.id + '">Pick for them</button>') +
+        '</div>';
+    }).join('');
+    var allDone = state.players.every(function(p){ return ms.votes.some(function(v){ return v.voterId === p.id; }); });
+    return (
+      '<div class="prompt-card" style="--mc:' + m.color + '"><div class="kicker">The Voting Game</div><div class="prompt-text">' + esc(ms.prompt) + '</div></div>' +
+      '<p class="screen-sub">📡 Votes come in privately on each phone. Room code <strong>' + esc(state.session.code) + '</strong>.</p>' +
+      '<div class="remote-list">' + rows + '</div>' +
+      (allDone ? '<button class="btn btn-primary btn-block" type="button" data-action="remote-vote-continue">See the Results</button>' : '')
+    );
+  }
+
   function renderVote(){
     var ms = state.modeState;
     var m = MODE_META.vote;
     if (ms.phase === 'voting') {
+      if (state.session && state.session.connected) {
+        return renderVoteRemote(ms, m);
+      }
       var voter = state.players[ms.collectIndex];
       if (!ms.revealed) {
         return (
@@ -3514,7 +3612,7 @@
       state.modeState.question = draw('group');
       render(); return;
     }
-    if (action === 'bottle-whispered') { state.modeState.phase = 'flip'; render(); return; }
+    if (action === 'bottle-whispered') { completeBottleWhisper(); render(); return; }
     if (action === 'bottle-flip') {
       state.modeState.phase = 'result';
       state.modeState.heads = Math.random() < 0.5;
@@ -3529,10 +3627,10 @@
       render(); return;
     }
     if (action === 'paranoia-whispered') {
-      state.modeState.phase = 'open';
-      advanceTurn();
+      completeParanoiaWhisper();
       render(); return;
     }
+    if (action === 'whisper-remote-fallback') { state.modeState.phase = 'whisper'; render(); return; }
     if (action === 'paranoia-dare') {
       state.modeState.dare = draw('dare');
       render(); return;
@@ -3546,20 +3644,18 @@
       ms3.collectIndex += 1;
       ms3.revealed = false;
       if (ms3.collectIndex >= state.players.length) {
-        var tally = {};
-        ms3.votes.forEach(function(v){ tally[v.targetId] = (tally[v.targetId] || 0) + 1; });
-        var maxVotes = Math.max.apply(null, Object.values(tally));
-        var topIds = Object.keys(tally).filter(function(id){ return tally[id] === maxVotes; });
-        ms3.tally = tally;
-        ms3.maxVotes = maxVotes;
-        ms3.topIds = topIds;
-        ms3.votersRevealed = false;
-        ms3.phase = 'result';
-        topIds.forEach(function(id){
-          var p = state.players.find(function(pl){ return pl.id === id; });
-          p.scores.mlt += 1;
-        });
+        computeVoteTally(ms3);
       }
+      render(); return;
+    }
+    if (action === 'vote-pick-fallback') {
+      var ms3b = state.modeState;
+      ms3b.votes.push({ voterId: ms3b.fallbackFor, targetId: btn.dataset.id });
+      ms3b.fallbackFor = null;
+      render(); return;
+    }
+    if (action === 'remote-vote-continue') {
+      computeVoteTally(state.modeState);
       render(); return;
     }
     if (action === 'vote-reveal-voters') { state.modeState.votersRevealed = true; render(); return; }
@@ -3826,6 +3922,65 @@
           '</div>';
         return;
       }
+
+      if (round.kind === 'bottle' || round.kind === 'paranoia') {
+        if (round.targetPlayerId !== myPlayerId) {
+          screenEl.innerHTML =
+            '<div class="join-wrap">' +
+              '<h2 class="screen-title">You\'re in, ' + esc(myName) + '!</h2>' +
+              '<p class="screen-sub">Waiting for the host to start a round that needs your phone…</p>' +
+            '</div>';
+          return;
+        }
+        if (round.ack) {
+          screenEl.innerHTML =
+            '<div class="join-wrap">' +
+              '<h2 class="screen-title">✅ Got it</h2>' +
+              '<p class="screen-sub">Go ahead and whisper it — the host screen will move on.</p>' +
+            '</div>';
+          return;
+        }
+        screenEl.innerHTML =
+          '<div class="join-wrap">' +
+            '<div class="prompt-card"><div class="kicker">Your question, ' + esc(myName) + '</div><div class="prompt-text">' + esc(round.prompt) + '</div></div>' +
+            '<p class="screen-sub">Whisper it to whoever\'s next to you, then tap below.</p>' +
+            '<button class="btn btn-primary btn-block" id="whisperedBtn" type="button">Whispered it 🤫</button>' +
+          '</div>';
+        document.getElementById('whisperedBtn').addEventListener('click', function(){
+          ref.update({ 'round.ack': true }).catch(function(err){ console.warn('ack failed', err); });
+        });
+        return;
+      }
+
+      if (round.kind === 'vote') {
+        var alreadyV = round.answers && Object.prototype.hasOwnProperty.call(round.answers, myPlayerId);
+        if (alreadyV) {
+          screenEl.innerHTML =
+            '<div class="join-wrap">' +
+              '<h2 class="screen-title">✅ Voted</h2>' +
+              '<p class="screen-sub">Waiting for everyone else to vote…</p>' +
+            '</div>';
+          return;
+        }
+        var voteNames = Object.keys(players).map(function(pid){
+          return '<button class="name-btn join-name-btn" type="button" data-vote-target="' + pid + '">' + esc(players[pid].name) + '</button>';
+        }).join('');
+        screenEl.innerHTML =
+          '<div class="join-wrap">' +
+            '<div class="prompt-card"><div class="kicker">The Voting Game</div><div class="prompt-text">' + esc(round.prompt) + '</div></div>' +
+            '<p class="screen-sub">Vote for whoever fits — yourself included. Nobody else should see this.</p>' +
+            '<div class="name-grid" style="grid-template-columns:1fr">' + voteNames + '</div>' +
+          '</div>';
+        screenEl.querySelectorAll('[data-vote-target]').forEach(function(btn){
+          btn.addEventListener('click', function(){
+            var upd = {};
+            upd['round.answers.' + myPlayerId] = btn.dataset.voteTarget;
+            ref.update(upd).catch(function(err){ console.warn('vote submit failed', err); alert('Could not submit — check your connection and try again.'); });
+          });
+        });
+        return;
+      }
+
       var already = round.answers && Object.prototype.hasOwnProperty.call(round.answers, myPlayerId);
       if (already) {
         screenEl.innerHTML =
