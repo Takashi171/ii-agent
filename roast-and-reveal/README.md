@@ -1,12 +1,17 @@
 # Roast & Reveal
 
-A personalized party game — single self-contained HTML file, no build step, no dependencies. Open the HTML file directly in a browser to play.
+A personalized party game — single self-contained HTML file, no build step, no dependencies.
+
+**`roast-and-reveal-multiplayer.html` is the one true copy of the game.** It's what's live on GitHub Pages, and it's safe to open anywhere — a Claude Artifact included — because every Connect Phones feature checks whether it actually got a Firestore connection first and quietly falls back to normal pass-the-phone play if not (blocked network, no internet, whatever). There used to be a second, Firebase-free file for the Artifact; it was deleted because it was just this file's code with the Connect Phones parts stripped out by hand, and every edit had to be made twice. Now there's one file, one place to edit, and the two ways of playing (solo device vs. QR-connected phones) are just a runtime toggle inside it.
 
 ## Files
 
-- `roast-and-reveal.html` — the game itself, single-device only (players pass one phone/laptop around). This is the version safe to publish as a Claude Artifact.
-- `roast-and-reveal-multiplayer.html` — identical game, plus an opt-in **Connect Phones** mode: a QR code lets each player join on their own phone. In Guess Who Said It, Hot Seat, and The Voting Game, each player privately types (or picks) their answer on their own device instead of one phone getting passed around, with a live "who's in" checklist on the host screen and a manual fallback for anyone not using their phone. In Truth Bottle and Paranoia — which only ever need one player to privately read a question before whispering it to their neighbor — that question goes straight to that player's own phone instead of the host device, and the host auto-advances once they confirm they've whispered it. Requires Firebase and a real static host (see below) — it will **not** work as a Claude Artifact, since the artifact sandbox's CSP blocks the network calls Firestore needs.
+- `roast-and-reveal-multiplayer.html` — the game. All 13 modes, After Dark, category-grouped hub, pair-scoring, Partners/Friends, the shareable party recap, and the opt-in **Connect Phones** QR mode described below.
 - `roast-reveal-library.html` — a searchable reference page listing every prompt/dare/question in the game's content pools, grouped by section, with a collapsible section nav.
+
+### Connect Phones, in short
+
+A QR code lets each player join on their own phone. In Guess Who Said It, Hot Seat, and The Voting Game, each player privately types (or picks) their answer on their own device instead of one phone getting passed around, with a live "who's in" checklist on the host screen and a manual fallback for anyone not using their phone. In Truth Bottle and Paranoia — which only ever need one player to privately read a question before whispering it to their neighbor — that question goes straight to that player's own phone instead of the host device, and the host auto-advances once they confirm they've whispered it. It needs Firebase and a real static host to actually connect (see below); without that, or inside a Claude Artifact's sandbox (which blocks the network calls Firestore needs), the toggle just falls back to pass-the-phone automatically.
 
 ## How to play
 

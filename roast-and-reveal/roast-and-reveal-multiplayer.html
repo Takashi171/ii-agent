@@ -3424,7 +3424,6 @@
   }
   function generateRecapCanvas(){
     var W = 1080;
-    var maxTotalPre = Math.max.apply(null, state.players.map(totalScore));
     var playedAwardsCount = AWARD_DEFS.filter(function(def){
       return Math.max.apply(null, state.players.map(function(p){ return p.scores[def.key]; })) > 0;
     }).length;
