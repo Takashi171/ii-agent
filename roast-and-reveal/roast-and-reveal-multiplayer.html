@@ -2426,6 +2426,7 @@
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       expiresAt: firebase.firestore.Timestamp.fromDate(expires),
       players: playersMap,
+      playerOrder: state.players.map(function(p){ return p.id; }),
       round: null
     }).then(function(){
       if (!state.session) return; // user backed out before this resolved
@@ -3195,7 +3196,7 @@
     }
     if (ms.phase === 'collecting') {
       if (state.session && state.session.connected) {
-        return renderCollectingRemote(ms, m, ms.order, 'hotseat-answer', ms.question, 'Hot Seat Question');
+        return renderCollectingRemote(ms, m, state.players.map(function(p){ return p.id; }), 'hotseat-answer', ms.question, 'Hot Seat Question');
       }
       var pid = ms.order[ms.collectIndex];
       var p = state.players.find(function(pl){ return pl.id === pid; });
@@ -4080,8 +4081,9 @@
         return;
       }
       var players = latestData.players || {};
+      var playerOrder = latestData.playerOrder || Object.keys(players);
       if (!myPlayerId || !players[myPlayerId]) {
-        var names = Object.keys(players).map(function(pid){
+        var names = playerOrder.filter(function(pid){ return players[pid]; }).map(function(pid){
           var pl = players[pid];
           return '<button class="name-btn join-name-btn" type="button" data-pid="' + pid + '"' + (pl.claimed ? ' disabled style="opacity:0.4"' : '') + '>' + esc(pl.name) + (pl.claimed ? ' (taken)' : '') + '</button>';
         }).join('');
@@ -4146,7 +4148,7 @@
             '</div>';
           return;
         }
-        var voteNames = Object.keys(players).map(function(pid){
+        var voteNames = playerOrder.filter(function(pid){ return players[pid]; }).map(function(pid){
           return '<button class="name-btn join-name-btn" type="button" data-vote-target="' + pid + '">' + esc(players[pid].name) + '</button>';
         }).join('');
         screenEl.innerHTML =
